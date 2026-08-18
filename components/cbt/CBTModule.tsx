@@ -1,0 +1,1683 @@
+'use client';
+
+import React, { useState, useEffect, useCallback } from 'react';
+import { useSchool } from '@/context/SchoolContext';
+import { CBTExam, CBTQuestion, CBTAttempt, Subject } from '@/lib/types';
+import {
+  MonitorPlay,
+  Plus,
+  Clock,
+  Sparkles,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  HelpCircle,
+  RotateCcw,
+  Check,
+  ChevronRight,
+  ChevronLeft,
+  Award,
+  FileQuestion,
+  Users,
+  Brain,
+  Trash2,
+  Pencil,
+  BookOpen,
+  Search,
+} from 'lucide-react';
+
+// Utility to shuffle options array randomly for student test takers
+const shuffleArray = <T,>(arr: T[]): T[] => {
+  const shuffled = [...arr];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+};
+
+export const CBTModule: React.FC = () => {
+  const {
+    currentUser,
+    switchUserRole,
+    cbtExams,
+    cbtAttempts,
+    classes,
+    subjects,
+    teachers,
+    students,
+    createCBTExam,
+    updateCBTExam,
+    deleteCBTExam,
+    submitCBTAttempt,
+    deleteCbtAttempt,
+    addSubject,
+    updateSubject,
+    deleteSubject,
+  } = useSchool();
+
+  const [activeView, setActiveView] = useState<'list' | 'subjects' | 'create' | 'live_test' | 'results_review'>('list');
+
+  // Selected Exam for Taking or Viewing
+  const [selectedExam, setSelectedExam] = useState<CBTExam | null>(null);
+  const [activeAttempt, setActiveAttempt] = useState<CBTAttempt | null>(null);
+
+  // Live Test State
+  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [userAnswers, setUserAnswers] = useState<Record<string, string>>({}); // questionId -> optionId
+  const [markedForReview, setMarkedForReview] = useState<Record<string, boolean>>({});
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState(0);
+  const [isExamSubmitted, setIsExamSubmitted] = useState(false);
+  const [showSubmitModal, setShowSubmitModal] = useState(false);
+
+  // Subject Catalog Management State on CBT Portal
+  const [subSearchText, setSubSearchText] = useState('');
+  const [subLevelFilter, setSubLevelFilter] = useState<'ALL' | 'JSS' | 'SSS'>('ALL');
+  const [showSubjectModal, setShowSubjectModal] = useState(false);
+  const [editingSubject, setEditingSubject] = useState<Subject | null>(null);
+  const [editingExamId, setEditingExamId] = useState<string | null>(null);
+
+  const startEditExam = (exam: CBTExam) => {
+    setEditingExamId(exam.id);
+    setNewTitle(exam.title);
+    setNewSubjectId(exam.subjectId);
+    setNewClassId(exam.classId);
+    setNewDuration(exam.durationMinutes);
+    setNewPassPercent(exam.passPercentage);
+    setNewStartDateTime(exam.startDateTime || new Date().toISOString().slice(0, 16));
+    setNewQuestions(exam.questions);
+    setActiveView('create');
+  };
+  const [subCode, setSubCode] = useState('');
+  const [subName, setSubName] = useState('');
+  const [subCategory, setSubCategory] = useState<'Core' | 'Science' | 'Arts' | 'Commercial' | 'General'>('Core');
+  const [subLevelGroup, setSubLevelGroup] = useState<'JSS' | 'SSS' | 'ALL'>('ALL');
+
+  // New Exam Creation Form State
+  const [newTitle, setNewTitle] = useState('');
+  const [newClassId, setNewClassId] = useState(classes[0]?.id || '');
+  const [newSubjectId, setNewSubjectId] = useState(subjects[0]?.id || '');
+  const [newDuration, setNewDuration] = useState(15);
+  const [newPassPercent, setNewPassPercent] = useState(50);
+  const [newStartDateTime, setNewStartDateTime] = useState('2026-08-17T09:00');
+  const [newQuestions, setNewQuestions] = useState<CBTQuestion[]>([]);
+
+  // Manual Question Form State inside Exam Creator
+  const [editingQuestionIndex, setEditingQuestionIndex] = useState<number | null>(null);
+  const [qText, setQText] = useState('');
+  const [optA, setOptA] = useState('');
+  const [optB, setOptB] = useState('');
+  const [optC, setOptC] = useState('');
+  const [optD, setOptD] = useState('');
+  const [correctOpt, setCorrectOpt] = useState<'opt-a' | 'opt-b' | 'opt-c' | 'opt-d'>('opt-a');
+
+  // Handle OK & Return to List after Exam Review
+  const handleOkLogout = () => {
+    setActiveView('list');
+    setSelectedExam(null);
+    setActiveAttempt(null);
+  };
+
+  // AI Question Generation State
+  const [isGeneratingAi, setIsGeneratingAi] = useState(false);
+  const [aiTopic, setAiTopic] = useState('');
+
+  // Submit Exam
+  const handleFinalSubmit = useCallback(() => {
+    if (!selectedExam) return;
+
+    let totalObtained = 0;
+    const answerLogs = selectedExam.questions.map((q) => {
+      const selectedOptionId = userAnswers[q.id] || '';
+      const isCorrect = selectedOptionId === q.correctOptionId;
+      const marksObtained = isCorrect ? q.marks : 0;
+      totalObtained += marksObtained;
+
+      return {
+        questionId: q.id,
+        selectedOptionId,
+        isCorrect,
+        marksObtained,
+      };
+    });
+
+    const percentageScore = Number(((totalObtained / selectedExam.totalMarks) * 100).toFixed(1));
+    const passed = percentageScore >= selectedExam.passPercentage;
+
+    // Student identity
+    const currentStudent = students.find((s) => s.id === currentUser.studentId) || students[0];
+
+    const attempt = submitCBTAttempt({
+      examId: selectedExam.id,
+      examTitle: selectedExam.title,
+      studentId: currentStudent.id,
+      studentName: currentStudent.fullName,
+      admissionNo: currentStudent.admissionNo,
+      answers: answerLogs,
+      scoreObtained: totalObtained,
+      totalPossibleMarks: selectedExam.totalMarks,
+      percentageScore,
+      passed,
+      startedAt: new Date().toLocaleString(),
+      completedAt: new Date().toLocaleString(),
+      timeTakenSeconds: selectedExam.durationMinutes * 60 - timeLeftSeconds,
+    });
+
+    setActiveAttempt(attempt);
+    setIsExamSubmitted(true);
+    setShowSubmitModal(false);
+    setActiveView('results_review');
+  }, [selectedExam, userAnswers, students, currentUser, submitCBTAttempt, timeLeftSeconds]);
+
+  // Timer Effect during Live Test - Auto submit automatically once time elapses
+  useEffect(() => {
+    if (activeView !== 'live_test' || isExamSubmitted) return;
+
+    const interval = setInterval(() => {
+      setTimeLeftSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(interval);
+          handleFinalSubmit();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [activeView, isExamSubmitted, handleFinalSubmit]);
+
+  // Start Exam Player
+  const startExamPlayer = (exam: CBTExam) => {
+    // Check if student has already attempted this exam
+    const currentStudentId = currentUser.studentId || students.find((s) => s.fullName === currentUser.name)?.id;
+    const hasAttempted = cbtAttempts.some(
+      (att) => att.examId === exam.id && (att.studentId === currentStudentId || att.studentName === currentUser.name)
+    );
+
+    if (currentUser.role === 'STUDENT' && hasAttempted) {
+      const studentAttempt = cbtAttempts.find(
+        (att) => att.examId === exam.id && (att.studentId === currentStudentId || att.studentName === currentUser.name)
+      );
+      if (studentAttempt) {
+        setSelectedExam(exam);
+        setActiveAttempt(studentAttempt);
+        setActiveView('results_review');
+        return;
+      }
+      alert('You have already submitted an attempt for this examination. Re-taking is not permitted.');
+      return;
+    }
+
+    // Randomize options for every question so correct answer text is distributed randomly across A, B, C, D
+    const randomizedQuestions = exam.questions.map((q) => {
+      // Find correct option's text
+      const correctOption = q.options.find((o) => o.id === q.correctOptionId) || q.options[0];
+      const correctText = correctOption ? correctOption.text : '';
+
+      // Shuffle options array randomly
+      const shuffledOptions = shuffleArray([...q.options]);
+
+      // Re-map with sequential IDs opt-a, opt-b, opt-c, opt-d
+      const newOptions = shuffledOptions.map((opt, idx) => ({
+        id: `opt-${String.fromCharCode(97 + idx)}`,
+        text: opt.text,
+      }));
+
+      // Find which new option holds the correct answer text
+      const newCorrectIdx = newOptions.findIndex((opt) => opt.text === correctText);
+      const newCorrectId = newCorrectIdx !== -1 ? newOptions[newCorrectIdx].id : 'opt-a';
+
+      return {
+        ...q,
+        options: newOptions,
+        correctOptionId: newCorrectId,
+      };
+    });
+
+    setSelectedExam({ ...exam, questions: randomizedQuestions });
+    setUserAnswers({});
+    setMarkedForReview({});
+    setCurrentQuestionIndex(0);
+    setTimeLeftSeconds(exam.durationMinutes * 60);
+    setIsExamSubmitted(false);
+    setActiveView('live_test');
+  };
+
+  // Format Start Date Time
+  const formatStartDateTime = (isoString?: string) => {
+    if (!isoString) return 'Available Immediately';
+    try {
+      const d = new Date(isoString);
+      return d.toLocaleString('en-US', {
+        dateStyle: 'medium',
+        timeStyle: 'short',
+      });
+    } catch {
+      return isoString;
+    }
+  };
+
+  const isExamOpen = (isoString?: string) => {
+    if (!isoString) return true;
+    return new Date().getTime() >= new Date(isoString).getTime();
+  };
+
+  // CBT Subject Catalog Filter Logic
+  const filteredSubjectsCbt = subjects.filter((s) => {
+    const matchesSearch =
+      s.name.toLowerCase().includes(subSearchText.toLowerCase()) ||
+      s.code.toLowerCase().includes(subSearchText.toLowerCase());
+    const matchesLevel =
+      subLevelFilter === 'ALL' || s.levelGroup === 'ALL' || s.levelGroup === subLevelFilter;
+    return matchesSearch && matchesLevel;
+  });
+
+  // CBT Subject Catalog Modal Actions
+  const openAddSubjectModalCbt = () => {
+    setEditingSubject(null);
+    setSubCode('');
+    setSubName('');
+    setSubCategory('Core');
+    setSubLevelGroup('ALL');
+    setShowSubjectModal(true);
+  };
+
+  const openEditSubjectModalCbt = (sub: Subject) => {
+    setEditingSubject(sub);
+    setSubCode(sub.code);
+    setSubName(sub.name);
+    setSubCategory(sub.category);
+    setSubLevelGroup(sub.levelGroup);
+    setShowSubjectModal(true);
+  };
+
+  const handleDeleteSubjectCbt = (sub: Subject) => {
+    if (window.confirm(`Are you sure you want to delete the subject "${sub.name}" (${sub.code}) from CBT portal?`)) {
+      deleteSubject(sub.id);
+    }
+  };
+
+  const handleSaveSubjectCbt = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!subName.trim() || !subCode.trim()) return;
+
+    if (editingSubject) {
+      updateSubject(editingSubject.id, {
+        code: subCode.trim().toUpperCase(),
+        name: subName.trim(),
+        category: subCategory,
+        levelGroup: subLevelGroup,
+      });
+    } else {
+      addSubject({
+        code: subCode.trim().toUpperCase(),
+        name: subName.trim(),
+        category: subCategory,
+        levelGroup: subLevelGroup,
+      });
+    }
+
+    setSubCode('');
+    setSubName('');
+    setEditingSubject(null);
+    setShowSubjectModal(false);
+  };
+
+  // Add / Edit Manual Question in Exam Creator (1, 2, 3, 4, 5...)
+  const handleAddQuestion = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!qText.trim() || !optA.trim() || !optB.trim()) {
+      alert('Please enter question text and at least options A and B.');
+      return;
+    }
+
+    if (editingQuestionIndex !== null) {
+      // Update existing question
+      setNewQuestions((prev) =>
+        prev.map((q, idx) =>
+          idx === editingQuestionIndex
+            ? {
+                ...q,
+                questionText: qText.trim(),
+                options: [
+                  { id: 'opt-a', text: optA.trim() },
+                  { id: 'opt-b', text: optB.trim() },
+                  { id: 'opt-c', text: optC.trim() || 'Option C' },
+                  { id: 'opt-d', text: optD.trim() || 'Option D' },
+                ],
+                correctOptionId: correctOpt,
+              }
+            : q
+        )
+      );
+      setEditingQuestionIndex(null);
+    } else {
+      // Add new question sequentially
+      const question: CBTQuestion = {
+        id: `q-${newQuestions.length + 1}`,
+        questionText: qText.trim(),
+        options: [
+          { id: 'opt-a', text: optA.trim() },
+          { id: 'opt-b', text: optB.trim() },
+          { id: 'opt-c', text: optC.trim() || 'Option C' },
+          { id: 'opt-d', text: optD.trim() || 'Option D' },
+        ],
+        correctOptionId: correctOpt,
+        marks: 1,
+      };
+
+      setNewQuestions((prev) => [...prev, question]);
+    }
+
+    // Reset inputs
+    setQText('');
+    setOptA('');
+    setOptB('');
+    setOptC('');
+    setOptD('');
+    setCorrectOpt('opt-a');
+  };
+
+  const startEditQuestion = (index: number) => {
+    const q = newQuestions[index];
+    if (!q) return;
+    setEditingQuestionIndex(index);
+    setQText(q.questionText);
+    setOptA(q.options.find((o) => o.id === 'opt-a')?.text || q.options[0]?.text || '');
+    setOptB(q.options.find((o) => o.id === 'opt-b')?.text || q.options[1]?.text || '');
+    setOptC(q.options.find((o) => o.id === 'opt-c')?.text || q.options[2]?.text || '');
+    setOptD(q.options.find((o) => o.id === 'opt-d')?.text || q.options[3]?.text || '');
+    setCorrectOpt((q.correctOptionId as any) || 'opt-a');
+  };
+
+  const cancelEditQuestion = () => {
+    setEditingQuestionIndex(null);
+    setQText('');
+    setOptA('');
+    setOptB('');
+    setOptC('');
+    setOptD('');
+    setCorrectOpt('opt-a');
+  };
+
+  // AI Auto-Generate CBT Questions
+  const handleGenerateAiQuestions = async () => {
+    const cls = classes.find((c) => c.id === newClassId);
+    const sub = subjects.find((s) => s.id === newSubjectId);
+
+    setIsGeneratingAi(true);
+    try {
+      const res = await fetch('/api/gemini', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'generate_cbt_questions',
+          classLevel: cls?.level || 'JSS1',
+          subject: sub?.name || 'Mathematics',
+          topic: aiTopic || 'General Term Assessment',
+        }),
+      });
+
+      const data = await res.json();
+      if (data.questions && Array.isArray(data.questions)) {
+        const sanitized = data.questions.map((q: any, qIdx: number) => ({
+          ...q,
+          id: q.id || `ai-q-${Date.now()}-${qIdx}-${Math.random().toString(36).substr(2, 4)}`,
+          correctOptionId: q.correctOptionId || 'opt-a',
+          marks: q.marks || 1,
+          options: (q.options || []).map((opt: any, oIdx: number) => ({
+            ...opt,
+            id: opt.id || `opt-${String.fromCharCode(97 + oIdx)}`,
+            text: opt.text || `Option ${String.fromCharCode(65 + oIdx)}`,
+          })),
+        }));
+        setNewQuestions((prev) => [...prev, ...sanitized]);
+      } else if (data.error) {
+        alert(`AI Error: ${data.error}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Failed to connect to Gemini AI generator.');
+    } finally {
+      setIsGeneratingAi(false);
+    }
+  };
+
+  // Save Created Exam
+  const handleSaveExam = () => {
+    if (!newTitle.trim()) {
+      alert('Please enter an exam title.');
+      return;
+    }
+    if (newQuestions.length === 0) {
+      alert('Please add at least 1 question to the exam.');
+      return;
+    }
+
+    const cls = classes.find((c) => c.id === newClassId);
+    const sub = subjects.find((s) => s.id === newSubjectId);
+
+    const totalMarksSum = newQuestions.reduce((acc, q) => acc + q.marks, 0);
+
+    createCBTExam({
+      title: newTitle.trim(),
+      subjectId: newSubjectId,
+      subjectName: sub ? sub.name : 'Mathematics',
+      classId: newClassId,
+      className: cls ? cls.name : 'JSS1 A',
+      teacherId: currentUser.teacherId || 'teacher-1',
+      durationMinutes: newDuration,
+      totalMarks: totalMarksSum,
+      passPercentage: newPassPercent,
+      maxAttempts: 1,
+      shuffleQuestions: true,
+      status: 'Published',
+      startDateTime: newStartDateTime,
+      questions: newQuestions,
+    });
+
+    // Reset Form
+    setNewTitle('');
+    setNewQuestions([]);
+    setActiveView('list');
+  };
+
+  // Format seconds to MM:SS
+  const formatTime = (secs: number) => {
+    const m = Math.floor(secs / 60);
+    const s = secs % 60;
+    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* View Switcher Bar */}
+      {activeView !== 'live_test' && (
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <MonitorPlay className="w-6 h-6 text-emerald-700" />
+              Computer-Based Testing (CBT) System
+            </h2>
+            <p className="text-xs text-slate-500 mt-1">
+              Divine Academy digital examination engine, subject catalog management, and auto-marking.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 bg-slate-100 p-1.5 rounded-2xl">
+            <button
+              onClick={() => setActiveView('list')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                activeView === 'list'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <FileQuestion className="w-3.5 h-3.5 text-emerald-700" />
+              Exams ({cbtExams.length})
+            </button>
+
+            <button
+              onClick={() => setActiveView('subjects')}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                activeView === 'subjects'
+                  ? 'bg-white text-slate-900 shadow-xs'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-emerald-700" />
+              Subjects ({subjects.length})
+            </button>
+
+            {(currentUser.role === 'ADMIN' || currentUser.role === 'TEACHER') && (
+              <button
+                onClick={() => {
+                  setNewQuestions([]);
+                  setEditingQuestionIndex(null);
+                  setActiveView('create');
+                }}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+                  activeView === 'create'
+                    ? 'bg-emerald-700 text-white shadow-xs'
+                    : 'bg-emerald-800 text-white hover:bg-emerald-900'
+                }`}
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Create CBT Exam
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* VIEW: SUBJECTS CATALOG (JSS & SSS) WITH EDIT AND DELETE */}
+      {activeView === 'subjects' && (
+        <div className="space-y-4">
+          <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                <BookOpen className="w-5 h-5 text-emerald-700" />
+                CBT Subject Catalog
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Manage all Junior Secondary (JSS 1-3) and Senior Secondary (SS 1-3) subjects. Each subject has edit and delete controls.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              {/* Search input */}
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-2.5 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Search subjects..."
+                  value={subSearchText}
+                  onChange={(e) => setSubSearchText(e.target.value)}
+                  className="pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-900 w-44 focus:outline-none"
+                />
+              </div>
+
+              {/* Level Filter */}
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-bold">
+                <button
+                  onClick={() => setSubLevelFilter('ALL')}
+                  className={`px-3 py-1 rounded-lg transition ${
+                    subLevelFilter === 'ALL' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  }`}
+                >
+                  All ({subjects.length})
+                </button>
+                <button
+                  onClick={() => setSubLevelFilter('JSS')}
+                  className={`px-3 py-1 rounded-lg transition ${
+                    subLevelFilter === 'JSS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  }`}
+                >
+                  JSS 1-3 ({subjects.filter((s) => s.levelGroup === 'JSS').length})
+                </button>
+                <button
+                  onClick={() => setSubLevelFilter('SSS')}
+                  className={`px-3 py-1 rounded-lg transition ${
+                    subLevelFilter === 'SSS' ? 'bg-white text-slate-900 shadow-2xs' : 'text-slate-600'
+                  }`}
+                >
+                  SS 1-3 ({subjects.filter((s) => s.levelGroup === 'SSS').length})
+                </button>
+              </div>
+
+              {(currentUser.role === 'ADMIN' || currentUser.role === 'TEACHER') && (
+                <button
+                  onClick={openAddSubjectModalCbt}
+                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white font-bold text-xs rounded-xl transition shadow-xs flex items-center gap-1.5"
+                >
+                  <Plus className="w-4 h-4" />
+                  Add New Subject
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Subjects Table */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase text-[10px] tracking-wider">
+                  <tr>
+                    <th className="p-4">#</th>
+                    <th className="p-4">Code</th>
+                    <th className="p-4">Subject Name</th>
+                    <th className="p-4">Category</th>
+                    <th className="p-4">Target Class Level</th>
+                    <th className="p-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-medium text-slate-700">
+                  {filteredSubjectsCbt.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                        No subjects match the selected filter.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSubjectsCbt.map((sub, index) => (
+                      <tr key={sub.id} className="hover:bg-slate-50/80 transition">
+                        <td className="p-4 font-bold text-slate-400">{index + 1}</td>
+                        <td className="p-4 font-mono font-bold text-emerald-800">{sub.code}</td>
+                        <td className="p-4 font-bold text-slate-900 text-sm">{sub.name}</td>
+                        <td className="p-4">
+                          <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-800 font-bold text-[11px]">
+                            {sub.category}
+                          </span>
+                        </td>
+                        <td className="p-4 font-extrabold">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-md text-[11px] ${
+                              sub.levelGroup === 'JSS'
+                                ? 'bg-amber-100 text-amber-900 border border-amber-200'
+                                : sub.levelGroup === 'SSS'
+                                ? 'bg-indigo-100 text-indigo-900 border border-indigo-200'
+                                : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                            }`}
+                          >
+                            {sub.levelGroup === 'JSS'
+                              ? 'Junior Secondary (JSS 1-3)'
+                              : sub.levelGroup === 'SSS'
+                              ? 'Senior Secondary (SS 1-3)'
+                              : 'All Classes (JSS & SSS)'}
+                          </span>
+                        </td>
+                        <td className="p-4 text-right space-x-2">
+                          <button
+                            onClick={() => openEditSubjectModalCbt(sub)}
+                            className="px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-200 transition inline-flex items-center gap-1.5 shadow-2xs"
+                            title="Edit Subject"
+                          >
+                            <Pencil className="w-3.5 h-3.5 text-amber-600" />
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteSubjectCbt(sub)}
+                            className="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl border border-rose-200 transition inline-flex items-center gap-1.5 shadow-2xs"
+                            title="Delete Subject"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 1: EXAM LIST */}
+      {activeView === 'list' && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Main Exams List */}
+          <div className="lg:col-span-2 space-y-4">
+            <h3 className="font-bold text-sm text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <FileQuestion className="w-4 h-4 text-emerald-700" />
+              Available CBT Examinations ({cbtExams.length})
+            </h3>
+
+            {cbtExams.length === 0 ? (
+              <div className="p-8 bg-white rounded-2xl border border-slate-200 text-center text-slate-400 text-xs">
+                No active CBT examinations found.
+              </div>
+            ) : (
+              cbtExams.map((exam) => (
+                <div
+                  key={exam.id}
+                  className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs hover:shadow-md transition space-y-3"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-md bg-emerald-100 text-emerald-900 font-extrabold text-[10px] uppercase">
+                        {exam.className}
+                      </span>
+                      <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-800 font-bold text-[10px]">
+                        {exam.subjectName}
+                      </span>
+                    </div>
+
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      {exam.status}
+                    </span>
+                  </div>
+
+                  <div>
+                    <h4 className="font-black text-base text-slate-900">{exam.title}</h4>
+                    <div className="text-xs text-slate-500 mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1">
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3.5 h-3.5 text-slate-400" />
+                        Duration: <strong>{exam.durationMinutes} Mins</strong>
+                      </span>
+                      <span>•</span>
+                      <span>
+                        Questions: <strong>{exam.questions.length}</strong> ({exam.totalMarks} Marks)
+                      </span>
+                      <span>•</span>
+                      <span className="flex items-center gap-1 font-semibold text-emerald-800">
+                        Start: <strong>{formatStartDateTime(exam.startDateTime)}</strong>
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-slate-400 font-medium">
+                      Passing Score: {exam.passPercentage}%
+                    </span>
+
+                    {(() => {
+                      const currentStudentId =
+                        currentUser.studentId || students.find((s) => s.fullName === currentUser.name)?.id;
+                      const hasAlreadyAttempted = cbtAttempts.some(
+                        (att) =>
+                          att.examId === exam.id &&
+                          (att.studentId === currentStudentId || att.studentName === currentUser.name)
+                      );
+                      const studentAttempt = cbtAttempts.find(
+                        (att) =>
+                          att.examId === exam.id &&
+                          (att.studentId === currentStudentId || att.studentName === currentUser.name)
+                      );
+                      const examAttempts = cbtAttempts.filter((att) => att.examId === exam.id);
+
+                      if (currentUser.role === 'STUDENT' && hasAlreadyAttempted) {
+                        return (
+                          <div className="flex items-center gap-2">
+                            {studentAttempt && (
+                              <button
+                                onClick={() => {
+                                  setSelectedExam(exam);
+                                  setActiveAttempt(studentAttempt);
+                                  setActiveView('results_review');
+                                }}
+                                className="px-4 py-2 bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border border-emerald-300 font-bold text-xs rounded-xl flex items-center gap-1.5 transition shadow-2xs cursor-pointer"
+                                title="View your detailed score sheet and answers review"
+                              >
+                                <Award className="w-4 h-4 text-emerald-700" />
+                                View Result ({studentAttempt.percentageScore}%)
+                              </button>
+                            )}
+                            <span className="text-[11px] text-slate-500 font-medium">Submitted</span>
+                          </div>
+                        );
+                      }
+
+                      if (currentUser.role === 'STUDENT' && !isExamOpen(exam.startDateTime)) {
+                        return (
+                          <button
+                            disabled
+                            className="px-4 py-2 bg-slate-200 text-slate-500 font-bold text-xs rounded-xl flex items-center gap-1.5 cursor-not-allowed"
+                            title={`Exam scheduled for ${formatStartDateTime(exam.startDateTime)}`}
+                          >
+                            <Clock className="w-4 h-4 text-slate-400" />
+                            Scheduled for {formatStartDateTime(exam.startDateTime)}
+                          </button>
+                        );
+                      }
+
+                      return (
+                        <div className="flex items-center flex-wrap gap-2">
+                          {(currentUser.role === 'ADMIN' || currentUser.role === 'TEACHER') && (
+                            <>
+                              {examAttempts.length > 0 && (
+                                <button
+                                  onClick={() => {
+                                    setSelectedExam(exam);
+                                    setActiveAttempt(examAttempts[0]);
+                                    setActiveView('results_review');
+                                  }}
+                                  className="px-3 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-xs rounded-xl border border-emerald-200 transition inline-flex items-center gap-1 shadow-2xs cursor-pointer"
+                                  title="View student results and score sheets for this exam"
+                                >
+                                  <Award className="w-3.5 h-3.5 text-emerald-600" />
+                                  View Result ({examAttempts.length})
+                                </button>
+                              )}
+                              <button
+                                onClick={() => startEditExam(exam)}
+                                className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs rounded-xl border border-amber-200 transition inline-flex items-center gap-1 shadow-2xs"
+                                title="Edit Exam"
+                              >
+                                <Pencil className="w-3.5 h-3.5 text-amber-600" />
+                                Edit
+                              </button>
+                              <button
+                                onClick={() => {
+                                  if (confirm(`Are you sure you want to delete exam "${exam.title}"?`)) {
+                                    deleteCBTExam(exam.id);
+                                  }
+                                }}
+                                className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs rounded-xl border border-rose-200 transition inline-flex items-center gap-1 shadow-2xs"
+                                title="Delete Exam"
+                              >
+                                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+                                Delete
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => startExamPlayer(exam)}
+                            className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs transition shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <MonitorPlay className="w-4 h-4 text-amber-300" />
+                            {currentUser.role === 'STUDENT' ? 'Start CBT Exam' : 'Preview Live Exam'}
+                          </button>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+
+          {/* Student Attempt History Side Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs">
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2 pb-3 border-b border-slate-100 mb-3">
+              <Award className="w-4 h-4 text-amber-500" />
+              Recent CBT Attempt Logs ({cbtAttempts.length})
+            </h3>
+
+            <div className="space-y-3 max-h-[500px] overflow-y-auto no-scrollbar">
+              {cbtAttempts.length === 0 ? (
+                <p className="text-xs text-slate-400 text-center py-6">No test submissions logged yet.</p>
+              ) : (
+                cbtAttempts.map((att) => (
+                  <div key={att.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between font-bold">
+                      <span className="text-slate-900 line-clamp-1">{att.studentName}</span>
+                      <span className={att.passed ? 'text-emerald-700 font-extrabold' : 'text-rose-600 font-extrabold'}>
+                        {att.percentageScore}% ({att.passed ? 'PASSED' : 'FAILED'})
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-500 line-clamp-1">{att.examTitle}</p>
+                    <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-200/60">
+                      <span>Score: {att.scoreObtained}/{att.totalPossibleMarks}</span>
+                      <span>{att.completedAt}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5 pt-1.5 border-t border-slate-200/60">
+                      <button
+                        onClick={() => {
+                          const exam = cbtExams.find((e) => e.id === att.examId) || {
+                            id: att.examId,
+                            title: att.examTitle,
+                            subjectId: 'sub-1',
+                            subjectName: 'Subject Assessment',
+                            classId: 'c-1',
+                            className: 'Class Test',
+                            teacherId: 't-1',
+                            durationMinutes: 15,
+                            totalMarks: att.totalPossibleMarks,
+                            passPercentage: 50,
+                            maxAttempts: 1,
+                            shuffleQuestions: true,
+                            status: 'Published',
+                            questions: [],
+                          };
+                          setSelectedExam(exam as CBTExam);
+                          setActiveAttempt(att);
+                          setActiveView('results_review');
+                        }}
+                        className="flex-1 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 font-bold text-[10px] rounded-lg transition flex items-center justify-center gap-1 border border-emerald-200 cursor-pointer"
+                        title="View detailed student score sheet"
+                      >
+                        <Award className="w-3 h-3 text-emerald-600" />
+                        View Result
+                      </button>
+                      {currentUser.role === 'ADMIN' && (
+                        <button
+                          onClick={() => {
+                            if (confirm(`Allow student ${att.studentName} to retake ${att.examTitle}? This will clear their previous attempt log.`)) {
+                              deleteCbtAttempt(att.id);
+                            }
+                          }}
+                          className="flex-1 py-1.5 bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold text-[10px] rounded-lg transition flex items-center justify-center gap-1 border border-amber-300 cursor-pointer"
+                          title="Reset attempt so student can retake exam"
+                        >
+                          <RotateCcw className="w-3 h-3 text-amber-700" />
+                          Allow Retake
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 2: EXAM CREATOR (TEACHER / ADMIN) */}
+      {activeView === 'create' && (
+        <div className="space-y-6">
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+              <Plus className="w-5 h-5 text-emerald-700" />
+              Create CBT Exam & Question Bank
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Exam Title *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. JSS1 Mathematics 1st Term CBT Test"
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Target Class *</label>
+                <select
+                  value={newClassId}
+                  onChange={(e) => setNewClassId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-900"
+                >
+                  {classes.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Subject *</label>
+                <select
+                  value={newSubjectId}
+                  onChange={(e) => setNewSubjectId(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-900"
+                >
+                  {subjects.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Duration (Minutes)</label>
+                <input
+                  type="number"
+                  value={newDuration}
+                  onChange={(e) => setNewDuration(Number(e.target.value))}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Start Date & Time *</label>
+                <input
+                  type="datetime-local"
+                  value={newStartDateTime}
+                  onChange={(e) => setNewStartDateTime(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-900 text-xs"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* AI Generator Banner */}
+          <div className="bg-gradient-to-r from-purple-900 via-indigo-900 to-slate-900 text-white p-5 rounded-2xl border border-purple-800 shadow-md">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <span className="text-amber-300 font-bold text-xs uppercase tracking-wider flex items-center gap-1">
+                  <Sparkles className="w-4 h-4" /> Gemini AI Question Generator
+                </span>
+                <h4 className="font-bold text-sm text-white mt-1">Auto-generate curriculum-aligned questions</h4>
+              </div>
+
+              <div className="flex items-center gap-2 flex-1 max-w-md">
+                <input
+                  type="text"
+                  placeholder="e.g. Whole Numbers & Place Values"
+                  value={aiTopic}
+                  onChange={(e) => setAiTopic(e.target.value)}
+                  className="w-full px-3 py-2 bg-white/10 border border-white/20 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  disabled={isGeneratingAi}
+                  onClick={handleGenerateAiQuestions}
+                  className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-900 font-bold text-xs rounded-xl shadow-xs transition shrink-0 disabled:opacity-50"
+                >
+                  {isGeneratingAi ? 'Generating...' : 'Generate Questions'}
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Manual Question Form & List */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Manual Entry */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+              <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                <h4 className="font-bold text-slate-900 text-sm flex items-center gap-1.5">
+                  <FileQuestion className="w-4 h-4 text-emerald-700" />
+                  {editingQuestionIndex !== null
+                    ? `Editing Question #${editingQuestionIndex + 1}`
+                    : `Add Question #${newQuestions.length + 1} Manually`}
+                </h4>
+                {editingQuestionIndex !== null && (
+                  <button
+                    type="button"
+                    onClick={cancelEditQuestion}
+                    className="text-xs text-slate-500 hover:text-slate-800 font-bold underline"
+                  >
+                    Cancel Editing
+                  </button>
+                )}
+              </div>
+
+              <form onSubmit={handleAddQuestion} className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">
+                    Question #{editingQuestionIndex !== null ? editingQuestionIndex + 1 : newQuestions.length + 1} Prompt *
+                  </label>
+                  <textarea
+                    rows={2}
+                    required
+                    placeholder={`Enter Question #${editingQuestionIndex !== null ? editingQuestionIndex + 1 : newQuestions.length + 1} text...`}
+                    value={qText}
+                    onChange={(e) => setQText(e.target.value)}
+                    className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900"
+                  />
+                </div>
+
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-emerald-900 font-bold flex items-center gap-1.5">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      Select Correct Answer:
+                    </span>
+                    <span className="text-[10px] text-emerald-700 font-medium">
+                      (Options will randomize for students)
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {(['opt-a', 'opt-b', 'opt-c', 'opt-d'] as const).map((optKey, idx) => {
+                      const letter = String.fromCharCode(65 + idx);
+                      const isSelected = correctOpt === optKey;
+                      return (
+                        <button
+                          key={optKey}
+                          type="button"
+                          onClick={() => setCorrectOpt(optKey)}
+                          className={`py-1.5 px-2 rounded-lg font-bold text-xs transition flex items-center justify-center gap-1 cursor-pointer ${
+                            isSelected
+                              ? 'bg-emerald-700 text-white shadow-xs'
+                              : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                          }`}
+                        >
+                          {isSelected && <Check className="w-3 h-3" />}
+                          Option {letter}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2">
+                  <div>
+                    <label className={`block font-bold mb-1 ${correctOpt === 'opt-a' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                      Option A {correctOpt === 'opt-a' ? '(Correct Answer) *' : '*'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Option A Text"
+                      value={optA}
+                      onChange={(e) => setOptA(e.target.value)}
+                      className={`w-full p-2 bg-slate-50 border rounded-xl text-slate-900 font-medium ${
+                        correctOpt === 'opt-a' ? 'border-emerald-500 bg-emerald-50/30 ring-1 ring-emerald-400' : 'border-slate-200'
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <label className={`block font-bold mb-1 ${correctOpt === 'opt-b' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                      Option B {correctOpt === 'opt-b' ? '(Correct Answer) *' : '*'}
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      placeholder="Option B Text"
+                      value={optB}
+                      onChange={(e) => setOptB(e.target.value)}
+                      className={`w-full p-2 bg-slate-50 border rounded-xl text-slate-900 ${
+                        correctOpt === 'opt-b' ? 'border-emerald-500 bg-emerald-50/30 ring-1 ring-emerald-400' : 'border-slate-200'
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <label className={`block font-bold mb-1 ${correctOpt === 'opt-c' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                      Option C {correctOpt === 'opt-c' ? '(Correct Answer)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Option C Text"
+                      value={optC}
+                      onChange={(e) => setOptC(e.target.value)}
+                      className={`w-full p-2 bg-slate-50 border rounded-xl text-slate-900 ${
+                        correctOpt === 'opt-c' ? 'border-emerald-500 bg-emerald-50/30 ring-1 ring-emerald-400' : 'border-slate-200'
+                      }`}
+                    />
+                  </div>
+                  <div>
+                    <label className={`block font-bold mb-1 ${correctOpt === 'opt-d' ? 'text-emerald-700' : 'text-slate-700'}`}>
+                      Option D {correctOpt === 'opt-d' ? '(Correct Answer)' : ''}
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Option D Text"
+                      value={optD}
+                      onChange={(e) => setOptD(e.target.value)}
+                      className={`w-full p-2 bg-slate-50 border rounded-xl text-slate-900 ${
+                        correctOpt === 'opt-d' ? 'border-emerald-500 bg-emerald-50/30 ring-1 ring-emerald-400' : 'border-slate-200'
+                      }`}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-bold transition text-xs shadow-xs"
+                  >
+                    {editingQuestionIndex !== null
+                      ? `Update Question #${editingQuestionIndex + 1}`
+                      : `Save Question #${newQuestions.length + 1} to Bank`}
+                  </button>
+                  {editingQuestionIndex !== null && (
+                    <button
+                      type="button"
+                      onClick={cancelEditQuestion}
+                      className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                </div>
+              </form>
+            </div>
+
+            {/* Question Bank Preview */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-3">
+                  <h4 className="font-bold text-slate-900 text-sm">
+                    Question Bank ({newQuestions.length} Questions)
+                  </h4>
+                  <span className="text-xs text-emerald-800 font-bold">
+                    Total: {newQuestions.reduce((a, b) => a + b.marks, 0)} Marks
+                  </span>
+                </div>
+
+                <div className="space-y-3 max-h-[380px] overflow-y-auto no-scrollbar">
+                  {newQuestions.length === 0 ? (
+                    <p className="text-xs text-slate-400 text-center py-10">
+                      No questions added yet. Use manual entry (Question #1, #2, #3...) or Gemini AI above.
+                    </p>
+                  ) : (
+                    newQuestions.map((q, idx) => (
+                      <div
+                        key={q.id}
+                        className={`p-3 rounded-xl border text-xs space-y-2 transition ${
+                          editingQuestionIndex === idx
+                            ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200'
+                            : 'bg-slate-50 border-slate-200'
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-bold text-slate-900 text-xs">
+                            <span className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 text-[10px] font-black mr-1.5">
+                              Question {idx + 1}
+                            </span>
+                            {q.questionText}
+                          </span>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => startEditQuestion(idx)}
+                              className="px-2 py-1 bg-amber-100 hover:bg-amber-200 text-amber-900 font-bold text-[10px] rounded-md transition flex items-center gap-1"
+                              title="Edit Question"
+                            >
+                              <Pencil className="w-3 h-3 text-amber-700" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setNewQuestions((prev) => prev.filter((_, i) => i !== idx));
+                                if (editingQuestionIndex === idx) cancelEditQuestion();
+                              }}
+                              className="px-2 py-1 bg-rose-100 hover:bg-rose-200 text-rose-900 font-bold text-[10px] rounded-md transition flex items-center gap-1"
+                              title="Delete Question"
+                            >
+                              <Trash2 className="w-3 h-3 text-rose-700" />
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-1 text-[11px] pt-1 border-t border-slate-200/60">
+                          {q.options.map((opt, optIdx) => (
+                            <div
+                              key={opt.id || `opt-${optIdx}`}
+                              className={`px-2 py-1 rounded-md font-medium truncate ${
+                                opt.id === q.correctOptionId
+                                  ? 'bg-emerald-100/70 text-emerald-900 font-bold'
+                                  : 'text-slate-600 bg-white'
+                              }`}
+                            >
+                              <strong className="uppercase mr-1">{opt.id.replace('opt-', '')}:</strong> {opt.text}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              <div className="pt-4 border-t border-slate-100 flex justify-end gap-2 mt-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveView('list')}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-semibold text-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveExam}
+                  className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs"
+                >
+                  Publish CBT Exam ({newQuestions.length} Questions)
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* VIEW 3: LIVE CBT TEST TAKING PORTAL (STUDENT / PREVIEW) */}
+      {activeView === 'live_test' && selectedExam && (
+        <div className="space-y-4 max-w-5xl mx-auto">
+          {/* Top Exam Header */}
+          <div className="bg-slate-900 text-white p-5 rounded-2xl shadow-xl flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 mb-1">
+                <span className="px-2 py-0.5 rounded-md bg-amber-400 text-slate-900 font-black text-[10px] uppercase">
+                  {selectedExam.className}
+                </span>
+                <span className="text-xs text-slate-300 font-bold">{selectedExam.subjectName}</span>
+              </div>
+              <h2 className="font-extrabold text-lg sm:text-xl text-white">{selectedExam.title}</h2>
+            </div>
+
+            {/* Countdown Timer Widget */}
+            <div className="flex items-center gap-3 px-4 py-2 bg-slate-800 rounded-xl border border-slate-700 shrink-0">
+              <Clock className={`w-5 h-5 ${timeLeftSeconds < 120 ? 'text-rose-500 animate-pulse' : 'text-amber-400'}`} />
+              <div>
+                <span className="text-[10px] text-slate-400 uppercase font-bold block">Time Remaining</span>
+                <span className={`font-mono text-xl font-black ${timeLeftSeconds < 120 ? 'text-rose-400' : 'text-white'}`}>
+                  {formatTime(timeLeftSeconds)}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Main Test Layout */}
+          <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+            {/* Left Question Box */}
+            <div className="lg:col-span-3 bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-6">
+              {/* Question Header */}
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+                <span className="font-bold text-emerald-800 text-xs uppercase tracking-wider">
+                  Question {currentQuestionIndex + 1} of {selectedExam.questions.length}
+                </span>
+
+                <button
+                  onClick={() => {
+                    const qId = selectedExam.questions[currentQuestionIndex].id;
+                    setMarkedForReview((prev) => ({ ...prev, [qId]: !prev[qId] }));
+                  }}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
+                    markedForReview[selectedExam.questions[currentQuestionIndex].id]
+                      ? 'bg-amber-100 text-amber-900 border border-amber-300'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
+                  {markedForReview[selectedExam.questions[currentQuestionIndex].id] ? 'Marked for Review' : 'Mark for Review'}
+                </button>
+              </div>
+
+              {/* Question Text */}
+              <div className="space-y-4">
+                <p className="text-base font-bold text-slate-900 leading-relaxed">
+                  {selectedExam.questions[currentQuestionIndex].questionText}
+                </p>
+
+                {/* Options List */}
+                <div className="space-y-2.5 pt-2">
+                  {selectedExam.questions[currentQuestionIndex].options.map((opt, optIdx) => {
+                    const qId = selectedExam.questions[currentQuestionIndex].id;
+                    const isSelected = userAnswers[qId] === opt.id;
+                    const optionLetter = String.fromCharCode(65 + optIdx);
+                    return (
+                      <button
+                        key={opt.id}
+                        onClick={() => setUserAnswers((prev) => ({ ...prev, [qId]: opt.id }))}
+                        className={`w-full text-left p-3.5 rounded-xl border font-semibold text-xs transition flex items-center justify-between cursor-pointer ${
+                          isSelected
+                            ? 'bg-emerald-50 border-emerald-600 text-emerald-900 shadow-2xs ring-1 ring-emerald-500'
+                            : 'bg-slate-50/50 border-slate-200 text-slate-800 hover:bg-slate-100'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`w-6 h-6 rounded-full border flex items-center justify-center font-bold text-xs uppercase ${
+                              isSelected ? 'bg-emerald-600 border-emerald-600 text-white' : 'border-slate-300 text-slate-600 bg-white'
+                            }`}
+                          >
+                            {optionLetter}
+                          </span>
+                          <span className="text-slate-900 font-medium">{opt.text}</span>
+                        </div>
+                        {isSelected && <Check className="w-4 h-4 text-emerald-700 shrink-0" />}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Bottom Navigation */}
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                <button
+                  disabled={currentQuestionIndex === 0}
+                  onClick={() => setCurrentQuestionIndex((prev) => prev - 1)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-bold text-xs transition disabled:opacity-40 flex items-center gap-1"
+                >
+                  <ChevronLeft className="w-4 h-4" /> Previous
+                </button>
+
+                {currentQuestionIndex < selectedExam.questions.length - 1 ? (
+                  <button
+                    onClick={() => setCurrentQuestionIndex((prev) => prev + 1)}
+                    className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs transition flex items-center gap-1 shadow-xs"
+                  >
+                    Next <ChevronRight className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => setShowSubmitModal(true)}
+                    className="px-6 py-2 bg-amber-400 hover:bg-amber-300 text-slate-900 font-extrabold text-xs rounded-xl shadow-xs transition"
+                  >
+                    Submit Test
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Right Question Palette */}
+            <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+              <h4 className="font-bold text-slate-900 text-xs uppercase tracking-wider">Question Palette</h4>
+
+              <div className="grid grid-cols-4 gap-2">
+                {selectedExam.questions.map((q, idx) => {
+                  const isAnswered = !!userAnswers[q.id];
+                  const isMarked = !!markedForReview[q.id];
+                  const isCurrent = currentQuestionIndex === idx;
+
+                  let bgClass = 'bg-slate-100 text-slate-700 border-slate-200';
+                  if (isAnswered) bgClass = 'bg-emerald-600 text-white border-emerald-600';
+                  if (isMarked) bgClass = 'bg-amber-400 text-slate-900 border-amber-400';
+
+                  return (
+                    <button
+                      key={q.id}
+                      onClick={() => setCurrentQuestionIndex(idx)}
+                      className={`w-9 h-9 rounded-xl font-bold text-xs border transition flex items-center justify-center relative ${bgClass} ${
+                        isCurrent ? 'ring-2 ring-slate-900 ring-offset-2' : ''
+                      }`}
+                    >
+                      {idx + 1}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Palette Legend */}
+              <div className="pt-3 border-t border-slate-100 space-y-1.5 text-[11px] text-slate-600">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-md bg-emerald-600"></span>
+                  <span>Answered</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-md bg-amber-400"></span>
+                  <span>Marked for Review</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-md bg-slate-100 border border-slate-300"></span>
+                  <span>Unanswered</span>
+                </div>
+              </div>
+
+              <button
+                onClick={() => setShowSubmitModal(true)}
+                className="w-full mt-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs transition shadow-xs"
+              >
+                Finish & Submit Test
+              </button>
+            </div>
+          </div>
+
+          {/* Submit Modal */}
+          {showSubmitModal && (
+            <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 text-center space-y-4">
+                <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-800 mx-auto flex items-center justify-center font-bold text-xl">
+                  ?
+                </div>
+                <h3 className="font-extrabold text-lg text-slate-900">Confirm CBT Examination Submission</h3>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  You have answered <strong>{Object.keys(userAnswers).length}</strong> of{' '}
+                  <strong>{selectedExam.questions.length}</strong> questions. Are you sure you want to finalize your submission?
+                </p>
+
+                <div className="flex justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => setShowSubmitModal(false)}
+                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-semibold text-xs transition"
+                  >
+                    Return to Test
+                  </button>
+                  <button
+                    onClick={handleFinalSubmit}
+                    className="px-6 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs transition"
+                  >
+                    Yes, Submit Test Now
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* VIEW 4: INSTANT CBT RESULT & DETAILED REVIEW */}
+      {activeView === 'results_review' && activeAttempt && selectedExam && (
+        <div className="space-y-6 max-w-4xl mx-auto">
+          {/* Result Banner */}
+          <div
+            className={`p-6 sm:p-8 rounded-2xl shadow-lg border text-white flex flex-col sm:flex-row items-center justify-between gap-6 ${
+              activeAttempt.passed
+                ? 'bg-gradient-to-r from-emerald-800 to-teal-900 border-emerald-700'
+                : 'bg-gradient-to-r from-rose-900 to-slate-900 border-rose-800'
+            }`}
+          >
+            <div>
+              <span className="px-3 py-1 rounded-full bg-white/20 text-white font-extrabold text-xs uppercase tracking-wider">
+                {activeAttempt.passed ? 'PASSED TEST' : 'NEEDS IMPROVEMENT'}
+              </span>
+              <h2 className="text-2xl sm:text-3xl font-black mt-2">{activeAttempt.studentName}</h2>
+              <p className="text-emerald-100 text-xs mt-1">{activeAttempt.examTitle}</p>
+            </div>
+
+            <div className="text-center sm:text-right shrink-0 bg-white/10 p-4 rounded-2xl border border-white/20">
+              <span className="text-[10px] text-emerald-200 uppercase font-bold block">Final Score</span>
+              <span className="text-3xl sm:text-4xl font-black text-amber-300">
+                {activeAttempt.percentageScore}%
+              </span>
+              <p className="text-xs text-white font-semibold mt-1">
+                {activeAttempt.scoreObtained} / {activeAttempt.totalPossibleMarks} Marks
+              </p>
+            </div>
+          </div>
+
+          {/* Question-by-Question Detailed Review */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-2xs space-y-4">
+            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2 pb-3 border-b border-slate-100">
+              <CheckCircle2 className="w-5 h-5 text-emerald-700" />
+              Detailed CBT Answers Review
+            </h3>
+
+            <div className="space-y-4">
+              {selectedExam.questions.map((q, idx) => {
+                const ansLog = activeAttempt.answers.find((a) => a.questionId === q.id);
+                const selectedOpt = q.options.find((o) => o.id === ansLog?.selectedOptionId);
+                const correctOpt = q.options.find((o) => o.id === q.correctOptionId);
+
+                return (
+                  <div
+                    key={q.id}
+                    className={`p-4 rounded-xl border text-xs space-y-2 ${
+                      ansLog?.isCorrect ? 'bg-emerald-50/50 border-emerald-200' : 'bg-rose-50/50 border-rose-200'
+                    }`}
+                  >
+                    <div className="flex justify-between font-bold text-slate-900">
+                      <span>Q{idx + 1}. {q.questionText}</span>
+                      <span className={ansLog?.isCorrect ? 'text-emerald-700' : 'text-rose-600'}>
+                        {ansLog?.isCorrect ? `+${ansLog.marksObtained} Marks` : '0 Marks'}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px] pt-1">
+                      <div>
+                        <span className="text-slate-400 font-bold block">Your Selected Option:</span>
+                        <span className={ansLog?.isCorrect ? 'font-bold text-emerald-800' : 'font-bold text-rose-700'}>
+                          {selectedOpt ? selectedOpt.text : 'Not Answered'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 font-bold block">Correct Option:</span>
+                        <span className="font-bold text-slate-900">{correctOpt?.text}</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 font-medium">
+                {currentUser.role === 'STUDENT'
+                  ? 'Click OK to finish your examination session and log out from the student portal.'
+                  : 'Finished reviewing student CBT examination result.'}
+              </div>
+              <button
+                onClick={handleOkLogout}
+                className="px-6 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold text-xs transition shadow-md flex items-center gap-2 cursor-pointer"
+              >
+                <CheckCircle2 className="w-4 h-4 text-amber-300" />
+                {currentUser.role === 'STUDENT' ? 'OK (Log Out & Finish Exam)' : 'OK (Return to Examination Hub)'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CBT Subject Modal (Add / Edit) */}
+      {showSubjectModal && (
+        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <h3 className="font-bold text-slate-900 text-base">
+                {editingSubject ? `Edit Subject: ${editingSubject.name}` : 'Add New Subject to CBT'}
+              </h3>
+              <button onClick={() => setShowSubjectModal(false)} className="text-slate-400 font-bold text-sm">
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveSubjectCbt} className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Subject Code *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. ENG101"
+                    value={subCode}
+                    onChange={(e) => setSubCode(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono uppercase text-slate-900 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Subject Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. English Studies"
+                    value={subName}
+                    onChange={(e) => setSubName(e.target.value)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium text-slate-900"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Category</label>
+                  <select
+                    value={subCategory}
+                    onChange={(e) => setSubCategory(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-900"
+                  >
+                    <option value="Core">Core</option>
+                    <option value="Science">Science</option>
+                    <option value="Arts">Arts</option>
+                    <option value="Commercial">Commercial</option>
+                    <option value="General">General</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Target Class Level</label>
+                  <select
+                    value={subLevelGroup}
+                    onChange={(e) => setSubLevelGroup(e.target.value as any)}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-semibold text-slate-900"
+                  >
+                    <option value="JSS">Junior Secondary (JSS 1-3)</option>
+                    <option value="SSS">Senior Secondary (SS 1-3)</option>
+                    <option value="ALL">All Classes (JSS & SSS)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowSubjectModal(false)}
+                  className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl font-semibold transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl font-bold transition shadow-xs"
+                >
+                  {editingSubject ? 'Update Subject' : 'Save Subject'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
