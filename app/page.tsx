@@ -20,6 +20,7 @@ import { SchoolSettings } from '@/components/settings/SchoolSettings';
 function AppContent() {
   const { isAuthenticated } = useSchool();
   const [activeTab, setActiveTab] = useState<TabType>('dashboard');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   if (!isAuthenticated) {
     return <LoginPage />;
@@ -27,15 +28,24 @@ function AppContent() {
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col font-sans text-slate-900 selection:bg-emerald-200">
-      {/* Top Sticky Header */}
-      <Navbar />
+      {/* Top Sticky Header with Navigation shortcuts & Mobile menu button */}
+      <Navbar
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
+        onToggleMobileMenu={() => setMobileMenuOpen((prev) => !prev)}
+      />
 
       {/* Main Application Shell */}
-      <div className="flex-1 flex flex-col lg:flex-row max-w-7xl w-full mx-auto p-3 sm:p-6 gap-6">
-        {/* Navigation Sidebar */}
-        <Sidebar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <div className="flex-1 flex flex-col lg:flex-row max-w-7xl w-full mx-auto p-3 sm:p-5 lg:p-6 gap-6">
+        {/* Navigation Sidebar (Desktop persistent + Mobile responsive drawer) */}
+        <Sidebar
+          activeTab={activeTab}
+          setActiveTab={setActiveTab}
+          mobileOpen={mobileMenuOpen}
+          onCloseMobile={() => setMobileMenuOpen(false)}
+        />
 
-        {/* Main Dashboard Canvas */}
+        {/* Main Content Area */}
         <main className="flex-1 min-w-0">
           {activeTab === 'dashboard' && <OverviewDashboard setActiveTab={setActiveTab} />}
           {activeTab === 'students' && <StudentManagement />}

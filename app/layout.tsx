@@ -2,17 +2,17 @@ import type {Metadata} from 'next';
 import './globals.css'; // Global styles
 
 export const metadata: Metadata = {
-  title: 'My Google AI Studio App',
-  description: 'An application built with Google AI Studio.',
+  title: 'Divine Academy School Portal',
+  description: 'Comprehensive School Management Portal with CBT Examination System, Result Management, and JSS1-SS3 Curriculum Centre for Divine Academy Secondary School, Okene.',
   openGraph: {
-    title: 'My Google AI Studio App',
-    description: 'An application built with Google AI Studio.',
+    title: 'Divine Academy School Portal',
+    description: 'Comprehensive School Management Portal with CBT Examination System, Result Management, and JSS1-SS3 Curriculum Centre for Divine Academy Secondary School, Okene.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'My Google AI Studio App',
-    description: 'An application built with Google AI Studio.',
+    title: 'Divine Academy School Portal',
+    description: 'Comprehensive School Management Portal with CBT Examination System, Result Management, and JSS1-SS3 Curriculum Centre for Divine Academy Secondary School, Okene.',
   },
 };
 
